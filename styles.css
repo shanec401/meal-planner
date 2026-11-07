@@ -1499,3 +1499,82 @@ h1, h2, h3, h4 {
   border-radius: 10px;
   border: 1px solid #b7e2c8;
 }
+
+/* ==========================================================================
+   IRISH SUPERMARKET FILTERS & QUICK-ADD STAPLES (DUNNES, TESCO, ALDI, LIDL)
+   ========================================================================== */
+
+.store-filter-wrap select {
+  padding: 9px 14px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: #fff;
+  font-weight: 600;
+  font-size: 0.86rem;
+  color: var(--text-main);
+  cursor: pointer;
+}
+
+.store-badge {
+  display: inline-block;
+  font-size: 0.7rem;
+  font-weight: 700;
+  padding: 2px 8px;
+  border-radius: 99px;
+  background: #fef3c7;
+  color: #92400e;
+  margin-left: 5px;
+}
+
+.irish-staples-box {
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 16px 18px;
+  margin-bottom: 18px;
+  box-shadow: var(--shadow-sm);
+}
+
+.irish-staples-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+
+.irish-staples-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.staple-chip-btn {
+  border: 1px solid var(--border);
+  background: var(--bg-page);
+  color: var(--text-main);
+  padding: 6px 12px;
+  border-radius: 999px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.staple-chip-btn:hover {
+  background: var(--bg-accent-soft);
+  border-color: var(--primary);
+  color: var(--primary);
+}
+
+.form-grid-3 {
+  display: grid;
+  grid-template-columns: 1.5fr 1fr 1fr;
+  gap: 12px;
+}
+
+@media (max-width: 720px) {
+  .form-grid-3 {
+    grid-template-columns: 1fr;
+  }
+}

@@ -131,6 +131,9 @@
           </div>
         </div>
         <div class="planner-toolbar-right">
+          <button id="btnLoadIrishPlan" class="btn btn-outline btn-sm" title="Load the 7-Day Irish Supermarket Plan (Dunnes, Tesco, Aldi, Lidl)">
+            🇮🇪 Load Irish Supermarket Plan
+          </button>
           <button id="btnPrintView" class="btn btn-ghost btn-sm">🖨️ Print View</button>
           <button id="btnClearWeek" class="btn btn-danger-ghost btn-sm">🗑️ Clear Week</button>
         </div>
@@ -156,11 +159,21 @@
         </div>
 
         <div class="category-filters" id="categoryFilterBar">
-          <button class="filter-chip active" data-category="All">All Recipes</button>
+          <button class="filter-chip active" data-category="All">All Meals</button>
           <button class="filter-chip" data-category="Breakfast">Breakfast</button>
           <button class="filter-chip" data-category="Lunch">Lunch</button>
           <button class="filter-chip" data-category="Dinner">Dinner</button>
           <button class="filter-chip" data-category="Snacks">Snacks</button>
+        </div>
+
+        <div class="store-filter-wrap">
+          <select id="storeFilterSelect" aria-label="Filter by Irish Supermarket">
+            <option value="All">🛒 All Supermarkets (IE)</option>
+            <option value="Dunnes Stores">🟢 Dunnes Stores</option>
+            <option value="Tesco">🔵 Tesco Ireland</option>
+            <option value="Aldi">🟠 Aldi Ireland</option>
+            <option value="Lidl">🟡 Lidl Ireland</option>
+          </select>
         </div>
 
         <button id="btnNewRecipe" class="btn btn-primary">
@@ -188,6 +201,14 @@
           <button id="btnUncheckAllGrocery" class="btn btn-ghost btn-sm">↺ Uncheck All</button>
           <button id="btnDownloadGroceryPdf" class="btn btn-secondary btn-sm">📄 Export PDF</button>
         </div>
+      </div>
+
+      <div class="irish-staples-box">
+        <div class="irish-staples-title">
+          <strong>🇮🇪 Quick-Add Irish Supermarket Staples</strong>
+          <span class="muted">(Dunnes Stores • Tesco • Aldi • Lidl — click any item to add to your trolley)</span>
+        </div>
+        <div id="irishStaplesContainer" class="irish-staples-chips"></div>
       </div>
 
       <form id="customGroceryForm" class="custom-grocery-form">
@@ -433,10 +454,10 @@
         <button class="modal-close" data-close-modal="newRecipeModal" aria-label="Close">&times;</button>
       </div>
       <form id="newRecipeForm" class="modal-body">
-        <div class="form-grid-2">
+        <div class="form-grid-3">
           <div class="form-group">
             <label for="recTitle">Recipe Title *</label>
-            <input id="recTitle" type="text" required placeholder="e.g. Garlic Butter Shrimp Tacos" />
+            <input id="recTitle" type="text" required placeholder="e.g. Air-Fryer Spice Bag" />
           </div>
           <div class="form-group">
             <label for="recCategory">Meal Category *</label>
@@ -445,6 +466,15 @@
               <option value="Lunch">Lunch</option>
               <option value="Dinner" selected>Dinner</option>
               <option value="Snacks">Snacks</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label for="recStore">Supermarket</label>
+            <select id="recStore">
+              <option value="Dunnes Stores">Dunnes Stores</option>
+              <option value="Tesco">Tesco Ireland</option>
+              <option value="Aldi">Aldi Ireland</option>
+              <option value="Lidl">Lidl Ireland</option>
             </select>
           </div>
         </div>

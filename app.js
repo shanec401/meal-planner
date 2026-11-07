@@ -9,6 +9,7 @@ import {
 
 import {
   STARTER_RECIPES,
+  IRISH_STAPLES_QUICK_ADD,
   DAYS_OF_WEEK,
   MEAL_SLOTS,
   DEFAULT_WEEKLY_PLAN
@@ -28,6 +29,7 @@ const state = {
   checkedGroceries: {},
   extraGroceries: [],
   activeCategory: "All",
+  activeStore: "All",
   searchQuery: "",
   activeSlotContext: null,
   activeRecipeDetailId: null,
@@ -696,9 +698,30 @@ function renderAll() {
   renderOfficialTemplateDropdown();
   renderWeeklyGrid();
   renderRecipesGrid();
+  renderIrishStaplesBar();
   renderGroceryList();
   renderAuthUI();
   renderAdminSection();
+}
+
+function renderIrishStaplesBar() {
+  const container = document.getElementById("irishStaplesContainer");
+  if (!container) return;
+  container.innerHTML = "";
+  IRISH_STAPLES_QUICK_ADD.forEach((staple) => {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "staple-chip-btn";
+    btn.textContent = `+ ${staple.name}`;
+    btn.title = `${staple.aisle} (${staple.store})`;
+    btn.addEventListener("click", () => {
+      state.extraGroceries.push({ name: staple.name, aisle: staple.aisle });
+      persistState();
+      renderGroceryList();
+      showToast(`🛒 Added "${staple.name}" to your grocery list!`);
+    });
+    container.appendChild(btn);
+  });
 }
 
 function renderOfficialTemplateDropdown() {
@@ -849,15 +872,23 @@ function renderRecipesGrid() {
     const matchesCategory =
       state.activeCategory === "All" || rec.category === state.activeCategory;
     if (!matchesCategory) return false;
+
+    const matchesStore =
+      state.activeStore === "All" ||
+      rec.store === state.activeStore ||
+      (Array.isArray(rec.availableAt) && rec.availableAt.includes(state.activeStore));
+    if (!matchesStore) return false;
+
     if (!query) return true;
 
     const inTitle = rec.title.toLowerCase().includes(query);
     const inDesc = (rec.description || "").toLowerCase().includes(query);
+    const inStore = (rec.store || "").toLowerCase().includes(query);
     const inTags = (rec.tags || []).some((t) => t.toLowerCase().includes(query));
     const inIng = (rec.ingredients || []).some((i) =>
       i.name.toLowerCase().includes(query)
     );
-    return inTitle || inDesc || inTags || inIng;
+    return inTitle || inDesc || inStore || inTags || inIng;
   });
 
   if (filtered.length === 0) {
@@ -873,11 +904,13 @@ function renderRecipesGrid() {
   filtered.forEach((rec) => {
     const card = document.createElement("article");
     card.className = "recipe-card";
+    const storeLabel = rec.store ? `<span class="store-badge">🛒 ${escapeHtml(rec.store)}</span>` : "";
     card.innerHTML = `
       <div>
         <div class="recipe-card-top">
           <div>
             <span class="category-badge">${escapeHtml(rec.category)}</span>
+            ${storeLabel}
             ${rec.isGlobal ? `<span class="category-badge" style="background:#dbeafe; color:#1e40af; margin-left:4px;">Global</span>` : ""}
             <h3>${escapeHtml(rec.title)}</h3>
           </div>
@@ -1445,6 +1478,16 @@ function bindUIEvents() {
     persistState(true);
   });
 
+  // Load Irish Supermarket Plan
+  document.getElementById("btnLoadIrishPlan").addEventListener("click", () => {
+    state.planTitle = "Irish Supermarket 7-Day Plan (Dunnes, Tesco, Aldi, Lidl)";
+    state.weeklyPlan = structuredClone(DEFAULT_WEEKLY_PLAN);
+    document.getElementById("planTitleInput").value = state.planTitle;
+    persistState();
+    renderAll();
+    showToast("🇮🇪 Loaded the 7-Day Irish Supermarket Plan!");
+  });
+
   // Clear Week
   document.getElementById("btnClearWeek").addEventListener("click", () => {
     DAYS_OF_WEEK.forEach((day) => {
@@ -1466,9 +1509,14 @@ function bindUIEvents() {
     window.print();
   });
 
-  // Recipe Search & Category Filter
+  // Recipe Search, Category & Irish Supermarket Filter
   document.getElementById("recipeSearchInput").addEventListener("input", (e) => {
     state.searchQuery = e.target.value;
+    renderRecipesGrid();
+  });
+
+  document.getElementById("storeFilterSelect").addEventListener("change", (e) => {
+    state.activeStore = e.target.value;
     renderRecipesGrid();
   });
 
@@ -1541,10 +1589,13 @@ function bindUIEvents() {
 
     const scope = document.getElementById("recPublishScope").value;
 
+    const selectedStore = document.getElementById("recStore")?.value || "Dunnes Stores";
     const newRec = {
       id: "custom-" + Date.now(),
       title: document.getElementById("recTitle").value.trim(),
       category: document.getElementById("recCategory").value,
+      store: selectedStore,
+      availableAt: [selectedStore],
       description: document.getElementById("recDesc").value.trim(),
       prepTime: Number(document.getElementById("recPrep").value) || 10,
       cookTime: Number(document.getElementById("recCook").value) || 15,
