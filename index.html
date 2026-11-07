@@ -1,0 +1,503 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>PlatePlan — Weekly Meal Planner, Recipes & Grocery List</title>
+  <meta name="description" content="Create weekly meal plans, browse step-by-step recipes with macros, generate automatic grocery lists, sync with Firebase, and export to PDF." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Outfit:wght@600;700;800&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="./styles.css" />
+  <!-- html2pdf.js for one-click client-side PDF download on GitHub Pages -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js" defer></script>
+</head>
+<body>
+  <!-- Top Navigation Bar -->
+  <header class="topbar no-print">
+    <div class="container topbar-inner">
+      <div class="brand">
+        <div class="brand-logo" aria-hidden="true">🥗</div>
+        <div>
+          <span class="brand-name">PlatePlan</span>
+          <span class="brand-tagline">Meal Plan • Recipes • Grocery</span>
+        </div>
+      </div>
+
+      <nav class="main-nav" aria-label="Primary Navigation">
+        <button class="nav-tab active" data-tab="planner">
+          <span class="tab-icon">📅</span> Weekly Planner
+        </button>
+        <button class="nav-tab" data-tab="recipes">
+          <span class="tab-icon">👩‍🍳</span> Recipes &amp; Cook
+        </button>
+        <button class="nav-tab" data-tab="grocery">
+          <span class="tab-icon">🛒</span> Grocery List
+          <span id="groceryCountBadge" class="badge-pill">0</span>
+        </button>
+      </nav>
+
+      <div class="topbar-actions">
+        <button id="btnFirebaseSetup" class="btn btn-ghost btn-sm" title="Configure Firebase Cloud Sync">
+          <span id="cloudStatusDot" class="status-dot offline"></span>
+          <span id="cloudStatusText">Local Mode</span>
+        </button>
+
+        <button id="btnDownloadPdf" class="btn btn-secondary btn-sm" title="Download Meal Plan & Grocery List as PDF">
+          📄 Download PDF
+        </button>
+
+        <div id="authArea">
+          <button id="btnOpenAuth" class="btn btn-primary btn-sm">
+            🔐 Sign In
+          </button>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <!-- Main Content Container -->
+  <main class="container main-content no-print">
+    <!--Macro & Plan Summary Banner-->
+    <section class="summary-banner">
+      <div class="summary-left">
+        <div>
+          <label for="planTitleInput" class="sr-only">Meal Plan Name</label>
+          <input
+            id="planTitleInput"
+            type="text"
+            class="plan-title-input"
+            value="My Balanced Weekly Plan"
+            aria-label="Meal Plan Title"
+          />
+          <p class="summary-subtitle" id="syncSubtitle">
+            All changes saved automatically. Click any meal slot to swap recipes or view how to cook.
+          </p>
+        </div>
+      </div>
+
+      <div class="summary-stats">
+        <div class="stat-pill">
+          <span class="stat-label">Avg Daily Calories</span>
+          <strong class="stat-value" id="avgCaloriesStat">0 kcal</strong>
+        </div>
+        <div class="stat-pill protein">
+          <span class="stat-label">Avg Protein</span>
+          <strong class="stat-value" id="avgProteinStat">0g</strong>
+        </div>
+        <div class="stat-pill carbs">
+          <span class="stat-label">Avg Carbs</span>
+          <strong class="stat-value" id="avgCarbsStat">0g</strong>
+        </div>
+        <div class="stat-pill fat">
+          <span class="stat-label">Avg Fat</span>
+          <strong class="stat-value" id="avgFatStat">0g</strong>
+        </div>
+      </div>
+
+      <div class="summary-actions">
+        <button id="btnAutoGenerate" class="btn btn-outline btn-sm" title="Randomly fill week with balanced meals">
+          ✨ Auto-Fill Week
+        </button>
+        <button id="btnSaveCloud" class="btn btn-primary btn-sm" title="Save current plan to database">
+          💾 Save Plan
+        </button>
+      </div>
+    </section>
+
+    <!-- ================================================================== -->
+    <!-- TAB 1: WEEKLY PLANNER                                              -->
+    <!-- ================================================================== -->
+    <section id="tab-planner" class="tab-panel active">
+      <div class="planner-toolbar">
+        <div class="goal-controls">
+          <label for="calorieGoalInput">Daily Calorie Target:</label>
+          <input id="calorieGoalInput" type="number" min="1000" max="5000" step="50" value="2000" />
+          <span>kcal/day</span>
+        </div>
+        <div class="planner-toolbar-right">
+          <button id="btnPrintView" class="btn btn-ghost btn-sm">🖨️ Print View</button>
+          <button id="btnClearWeek" class="btn btn-danger-ghost btn-sm">🗑️ Clear Week</button>
+        </div>
+      </div>
+
+      <div id="weeklyGrid" class="weekly-grid">
+        <!-- Populated dynamically by app.js -->
+      </div>
+    </section>
+
+    <!-- ================================================================== -->
+    <!-- TAB 2: RECIPES & COOKING INSTRUCTIONS                              -->
+    <!-- ================================================================== -->
+    <section id="tab-recipes" class="tab-panel">
+      <div class="recipes-toolbar">
+        <div class="search-box">
+          <span class="search-icon">🔍</span>
+          <input
+            id="recipeSearchInput"
+            type="search"
+            placeholder="Search recipes by name, ingredient, or tag (e.g. salmon, high protein)..."
+          />
+        </div>
+
+        <div class="category-filters" id="categoryFilterBar">
+          <button class="filter-chip active" data-category="All">All Recipes</button>
+          <button class="filter-chip" data-category="Breakfast">Breakfast</button>
+          <button class="filter-chip" data-category="Lunch">Lunch</button>
+          <button class="filter-chip" data-category="Dinner">Dinner</button>
+          <button class="filter-chip" data-category="Snacks">Snacks</button>
+        </div>
+
+        <button id="btnNewRecipe" class="btn btn-primary">
+          ➕ Add Custom Recipe
+        </button>
+      </div>
+
+      <div id="recipesGrid" class="recipes-grid">
+        <!-- Populated dynamically by app.js -->
+      </div>
+    </section>
+
+    <!-- ================================================================== -->
+    <!-- TAB 3: AUTOMATIC GROCERY / SHOPPING LIST                           -->
+    <!-- ================================================================== -->
+    <section id="tab-grocery" class="tab-panel">
+      <div class="grocery-header">
+        <div>
+          <h2>Automatic Grocery List</h2>
+          <p class="muted">
+            Ingredients are automatically calculated and grouped by aisle from your active 7-day meal plan.
+          </p>
+        </div>
+        <div class="grocery-actions">
+          <button id="btnUncheckAllGrocery" class="btn btn-ghost btn-sm">↺ Uncheck All</button>
+          <button id="btnDownloadGroceryPdf" class="btn btn-secondary btn-sm">📄 Export PDF</button>
+        </div>
+      </div>
+
+      <form id="customGroceryForm" class="custom-grocery-form">
+        <input
+          id="customGroceryName"
+          type="text"
+          placeholder="Add extra item (e.g., Paper towels, Sparkling water, Coffee beans)..."
+          required
+        />
+        <select id="customGroceryAisle">
+          <option value="Produce">Produce</option>
+          <option value="Meat & Seafood">Meat &amp; Seafood</option>
+          <option value="Dairy & Eggs">Dairy &amp; Eggs</option>
+          <option value="Pantry & Grains" selected>Pantry &amp; Grains</option>
+          <option value="Bakery">Bakery</option>
+          <option value="Spices & Condiments">Spices &amp; Condiments</option>
+          <option value="Household & Other">Household &amp; Other</option>
+        </select>
+        <button type="submit" class="btn btn-primary">Add Item</button>
+      </form>
+
+      <div id="groceryAislesContainer" class="grocery-aisles-grid">
+        <!-- Populated dynamically by app.js -->
+      </div>
+    </section>
+  </main>
+
+  <!-- ==================================================================== -->
+  <!-- MODAL 1: RECIPE DETAILS & STEP-BY-STEP COOKING INSTRUCTIONS          -->
+  <!-- ==================================================================== -->
+  <div id="recipeDetailModal" class="modal-backdrop hidden no-print" role="dialog" aria-modal="true">
+    <div class="modal-card modal-lg">
+      <div class="modal-header">
+        <div class="recipe-modal-title-wrap">
+          <span id="detailEmoji" class="recipe-detail-emoji">🍲</span>
+          <div>
+            <span id="detailCategoryBadge" class="category-badge">Dinner</span>
+            <h2 id="detailTitle">Recipe Title</h2>
+          </div>
+        </div>
+        <button class="modal-close" data-close-modal="recipeDetailModal" aria-label="Close">&times;</button>
+      </div>
+
+      <div class="modal-body">
+        <p id="detailDescription" class="recipe-detail-desc"></p>
+
+        <div class="recipe-meta-bar">
+          <div class="meta-item"><span>⏱️ Prep:</span> <strong id="detailPrep">10m</strong></div>
+          <div class="meta-item"><span>🔥 Cook:</span> <strong id="detailCook">15m</strong></div>
+          <div class="meta-item"><span>🍽️ Servings:</span> <strong id="detailServings">2</strong></div>
+          <div class="meta-item highlight"><span>⚡ Calories:</span> <strong id="detailCalories">500 kcal</strong></div>
+          <div class="meta-item"><span>💪 Protein:</span> <strong id="detailProtein">35g</strong></div>
+          <div class="meta-item"><span>🌾 Carbs:</span> <strong id="detailCarbs">40g</strong></div>
+          <div class="meta-item"><span>🥑 Fat:</span> <strong id="detailFat">18g</strong></div>
+        </div>
+
+        <div class="recipe-detail-columns">
+          <div class="ingredients-column">
+            <h3>🛒 Ingredients</h3>
+            <ul id="detailIngredientsList" class="detail-ingredients-list"></ul>
+          </div>
+
+          <div class="instructions-column">
+            <h3>👩‍🍳 How to Cook (Step-by-Step)</h3>
+            <ol id="detailInstructionsList" class="detail-instructions-list"></ol>
+          </div>
+        </div>
+
+        <div class="assign-to-plan-box">
+          <h4>📅 Add this recipe to your Weekly Plan</h4>
+          <div class="assign-controls">
+            <select id="assignDaySelect">
+              <option value="Monday">Monday</option>
+              <option value="Tuesday">Tuesday</option>
+              <option value="Wednesday">Wednesday</option>
+              <option value="Thursday">Thursday</option>
+              <option value="Friday">Friday</option>
+              <option value="Saturday">Saturday</option>
+              <option value="Sunday">Sunday</option>
+            </select>
+            <select id="assignSlotSelect">
+              <option value="Breakfast">Breakfast</option>
+              <option value="Lunch">Lunch</option>
+              <option value="Dinner">Dinner</option>
+              <option value="Snacks">Snacks</option>
+            </select>
+            <button id="btnAssignRecipeToSlot" class="btn btn-primary">Assign to Slot</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ==================================================================== -->
+  <!-- MODAL 2: PICK A RECIPE FOR A CALENDAR SLOT                           -->
+  <!-- ==================================================================== -->
+  <div id="slotPickerModal" class="modal-backdrop hidden no-print" role="dialog" aria-modal="true">
+    <div class="modal-card">
+      <div class="modal-header">
+        <div>
+          <h2 id="slotPickerHeading">Select Meal for Monday — Breakfast</h2>
+          <p class="muted">Choose a recipe from your library or clear the slot.</p>
+        </div>
+        <button class="modal-close" data-close-modal="slotPickerModal" aria-label="Close">&times;</button>
+      </div>
+      <div class="modal-body">
+        <input
+          id="slotPickerSearch"
+          type="search"
+          class="full-width-input"
+          placeholder="Filter recipes..."
+        />
+        <div id="slotPickerList" class="slot-picker-list"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ==================================================================== -->
+  <!-- MODAL 3: CREATE CUSTOM RECIPE                                        -->
+  <!-- ==================================================================== -->
+  <div id="newRecipeModal" class="modal-backdrop hidden no-print" role="dialog" aria-modal="true">
+    <div class="modal-card modal-lg">
+      <div class="modal-header">
+        <h2>➕ Create Custom Recipe</h2>
+        <button class="modal-close" data-close-modal="newRecipeModal" aria-label="Close">&times;</button>
+      </div>
+      <form id="newRecipeForm" class="modal-body">
+        <div class="form-grid-2">
+          <div class="form-group">
+            <label for="recTitle">Recipe Title *</label>
+            <input id="recTitle" type="text" required placeholder="e.g. Garlic Butter Shrimp Tacos" />
+          </div>
+          <div class="form-group">
+            <label for="recCategory">Meal Category *</label>
+            <select id="recCategory" required>
+              <option value="Breakfast">Breakfast</option>
+              <option value="Lunch">Lunch</option>
+              <option value="Dinner" selected>Dinner</option>
+              <option value="Snacks">Snacks</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label for="recDesc">Short Description</label>
+          <input id="recDesc" type="text" placeholder="Zesty pan-seared shrimp tucked into warm corn tortillas with lime slaw." />
+        </div>
+
+        <div class="form-grid-4">
+          <div class="form-group">
+            <label for="recPrep">Prep (mins)</label>
+            <input id="recPrep" type="number" min="0" value="10" required />
+          </div>
+          <div class="form-group">
+            <label for="recCook">Cook (mins)</label>
+            <input id="recCook" type="number" min="0" value="15" required />
+          </div>
+          <div class="form-group">
+            <label for="recServings">Servings</label>
+            <input id="recServings" type="number" min="1" value="2" required />
+          </div>
+          <div class="form-group">
+            <label for="recEmoji">Icon Emoji</label>
+            <input id="recEmoji" type="text" maxlength="4" value="🌮" />
+          </div>
+        </div>
+
+        <div class="form-grid-4">
+          <div class="form-group">
+            <label for="recCalories">Calories (kcal)</label>
+            <input id="recCalories" type="number" min="0" value="450" required />
+          </div>
+          <div class="form-group">
+            <label for="recProtein">Protein (g)</label>
+            <input id="recProtein" type="number" min="0" value="32" required />
+          </div>
+          <div class="form-group">
+            <label for="recCarbs">Carbs (g)</label>
+            <input id="recCarbs" type="number" min="0" value="38" required />
+          </div>
+          <div class="form-group">
+            <label for="recFat">Fat (g)</label>
+            <input id="recFat" type="number" min="0" value="16" required />
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label>Ingredients (One per line: <code>Amount | Unit | Ingredient Name | Aisle</code>)</label>
+          <textarea id="recIngredientsText" rows="5" required placeholder="300 | g | Wild shrimp, peeled | Meat & Seafood&#10;4 | whole | Corn tortillas | Bakery&#10;1 | cup | Shredded purple cabbage | Produce&#10;1 | tbsp | Lime juice | Produce"></textarea>
+        </div>
+
+        <div class="form-group">
+          <label>Cooking Instructions (One step per line)</label>
+          <textarea id="recInstructionsText" rows="5" required placeholder="Pat shrimp dry and season with garlic powder, cumin, paprika, and salt.&#10;Sear shrimp in a hot skillet with olive oil for 2 minutes per side.&#10;Warm the corn tortillas and assemble with cabbage slaw and shrimp."></textarea>
+        </div>
+
+        <div class="modal-footer">
+          <button type="button" class="btn btn-ghost" data-close-modal="newRecipeModal">Cancel</button>
+          <button type="submit" class="btn btn-primary">Save Recipe</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- ==================================================================== -->
+  <!-- MODAL 4: AUTHENTICATION (GOOGLE OR USERNAME/EMAIL + PASSWORD)        -->
+  <!-- ==================================================================== -->
+  <div id="authModal" class="modal-backdrop hidden no-print" role="dialog" aria-modal="true">
+    <div class="modal-card modal-sm">
+      <div class="modal-header">
+        <h2 id="authModalTitle">Sign In to PlatePlan</h2>
+        <button class="modal-close" data-close-modal="authModal" aria-label="Close">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="auth-mode-tabs">
+          <button type="button" class="auth-tab active" data-auth-mode="login">Log In</button>
+          <button type="button" class="auth-tab" data-auth-mode="register">Create Account</button>
+        </div>
+
+        <button id="btnGoogleSignIn" type="button" class="btn btn-google full-width">
+          <svg width="18" height="18" viewBox="0 0 48 48" aria-hidden="true">
+            <path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/>
+            <path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/>
+            <path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/>
+            <path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/>
+          </svg>
+          Continue with Google
+        </button>
+
+        <div class="auth-divider"><span>OR USERNAME / EMAIL</span></div>
+
+        <form id="credentialsAuthForm">
+          <div class="form-group">
+            <label for="authIdentifier">Username or Email *</label>
+            <input
+              id="authIdentifier"
+              type="text"
+              required
+              placeholder="e.g. chef_alex or alex@example.com"
+              autocomplete="username"
+            />
+            <small class="form-hint">If you enter a username without @, we format it automatically for Firebase Auth.</small>
+          </div>
+          <div class="form-group">
+            <label for="authPassword">Password *</label>
+            <input
+              id="authPassword"
+              type="password"
+              required
+              minlength="6"
+              placeholder="At least 6 characters"
+              autocomplete="current-password"
+            />
+          </div>
+          <p id="authErrorMsg" class="error-msg hidden"></p>
+          <button id="btnSubmitCredentials" type="submit" class="btn btn-primary full-width">
+            Sign In
+          </button>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <!-- ==================================================================== -->
+  <!-- MODAL 5: FIREBASE DATABASE & AUTH CONFIGURATION                      -->
+  <!-- ==================================================================== -->
+  <div id="firebaseSetupModal" class="modal-backdrop hidden no-print" role="dialog" aria-modal="true">
+    <div class="modal-card modal-lg">
+      <div class="modal-header">
+        <h2>🔥 Firebase Auth &amp; Firestore Database Setup</h2>
+        <button class="modal-close" data-close-modal="firebaseSetupModal" aria-label="Close">&times;</button>
+      </div>
+      <div class="modal-body">
+        <p class="muted">
+          To enable real cloud login (Google &amp; Username/Password) and cross-device Firestore database saving on GitHub Pages, paste your Firebase Web App configuration below or edit <code>firebase-config.js</code>.
+        </p>
+
+        <div class="setup-steps">
+          <ol>
+            <li>Go to <a href="https://console.firebase.google.com/" target="_blank" rel="noopener">Firebase Console</a> &rarr; Create a project &rarr; Add a Web App (<code>&lt;/&gt;</code>).</li>
+            <li>In <strong>Authentication &rarr; Sign-in method</strong>, enable <strong>Email/Password</strong> and <strong>Google</strong>.</li>
+            <li>In <strong>Authentication &rarr; Settings &rarr; Authorized domains</strong>, add your GitHub Pages domain (<code>yourusername.github.io</code>).</li>
+            <li>In <strong>Firestore Database</strong>, create a database so users' meal plans and custom recipes are stored under <code>users/{uid}</code>.</li>
+          </ol>
+        </div>
+
+        <form id="firebaseConfigForm">
+          <div class="form-grid-2">
+            <div class="form-group">
+              <label for="fbApiKey">apiKey *</label>
+              <input id="fbApiKey" type="text" placeholder="AIzaSy..." required />
+            </div>
+            <div class="form-group">
+              <label for="fbAuthDomain">authDomain *</label>
+              <input id="fbAuthDomain" type="text" placeholder="your-app.firebaseapp.com" required />
+            </div>
+            <div class="form-group">
+              <label for="fbProjectId">projectId *</label>
+              <input id="fbProjectId" type="text" placeholder="your-app-id" required />
+            </div>
+            <div class="form-group">
+              <label for="fbAppId">appId *</label>
+              <input id="fbAppId" type="text" placeholder="1:123456789:web:abcdef" required />
+            </div>
+          </div>
+
+          <div class="modal-footer">
+            <button type="button" id="btnResetFirebaseConfig" class="btn btn-danger-ghost">Use Local Demo Mode</button>
+            <button type="submit" class="btn btn-primary">Save &amp; Connect Firebase</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <!-- ==================================================================== -->
+  <!-- PRINT / PDF EXPORT CONTAINER (Rendered cleanly for PDF & Print)      -->
+  <!-- ==================================================================== -->
+  <section id="pdfExportContainer" class="pdf-export-sheet" aria-hidden="true">
+    <!-- Populated dynamically right before PDF export or print -->
+  </section>
+
+  <!-- Toast Notification -->
+  <div id="toastContainer" class="toast-container no-print" aria-live="polite"></div>
+
+  <script type="module" src="./app.js"></script>
+</body>
+</html>
