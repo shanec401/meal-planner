@@ -1,5 +1,5 @@
 // ============================================================================
-// PLATEPLAN — MAIN APPLICATION CONTROLLER
+// PLATEPLAN — MAIN APPLICATION CONTROLLER (WITH ADMIN & DB SAFEGUARDS)
 // ============================================================================
 
 import {
@@ -20,14 +20,20 @@ const state = {
   calorieGoal: 2000,
   weeklyPlan: structuredClone(DEFAULT_WEEKLY_PLAN),
   customRecipes: [],
+  globalRecipes: [],
+  officialTemplates: [],
+  pendingSubmissions: [],
+  registeredUsers: [],
+  adminUids: new Set(),
   checkedGroceries: {},
   extraGroceries: [],
   activeCategory: "All",
   searchQuery: "",
-  activeSlotContext: null, // { day, slot }
+  activeSlotContext: null,
   activeRecipeDetailId: null,
-  authMode: "login", // "login" | "register"
-  user: null, // { uid, displayName, email, isCloud }
+  authMode: "login",
+  user: null, // { uid, displayName, email, isCloud, status }
+  isAdmin: false,
   firebaseReady: false,
   fbAuth: null,
   fbDb: null,
@@ -46,7 +52,16 @@ document.addEventListener("DOMContentLoaded", async () => {
 });
 
 function getAllRecipes() {
-  return [...state.customRecipes, ...STARTER_RECIPES];
+  // Combine user's personal custom recipes, Admin-published global recipes, and built-in starter recipes
+  const seen = new Set();
+  const list = [];
+  [...state.customRecipes, ...state.globalRecipes, ...STARTER_RECIPES].forEach((r) => {
+    if (r && r.id && !seen.has(r.id)) {
+      seen.add(r.id);
+      list.push(r);
+    }
+  });
+  return list;
 }
 
 function getRecipeById(id) {
@@ -98,6 +113,11 @@ function saveToLocalStorage() {
 async function persistState(showToastMsg = false) {
   saveToLocalStorage();
 
+  if (state.user?.status === "blocked") {
+    showToast("🚫 Your account is restricted by an Admin and cannot sync to cloud.");
+    return;
+  }
+
   if (state.firebaseReady && state.user && state.user.isCloud && state.fbDb) {
     try {
       const { doc, setDoc } = state.fbModules;
@@ -105,6 +125,8 @@ async function persistState(showToastMsg = false) {
       await setDoc(
         userDocRef,
         {
+          displayName: state.user.displayName,
+          email: state.user.email,
           planTitle: state.planTitle,
           calorieGoal: state.calorieGoal,
           weeklyPlan: state.weeklyPlan,
@@ -121,7 +143,7 @@ async function persistState(showToastMsg = false) {
     } catch (err) {
       console.error("Firestore save error:", err);
       if (showToastMsg) {
-        showToast("⚠️ Saved locally (Firestore sync failed: " + err.message + ")");
+        showToast("⚠️ Saved locally (Cloud restriction: " + err.message + ")");
       }
     }
   } else if (showToastMsg) {
@@ -156,19 +178,25 @@ async function initFirebaseIfConfigured() {
 
     updateCloudBadge(true);
 
+    // Load public global recipes & official template plans immediately
+    await loadPublicCloudCatalog();
+
     authMod.onAuthStateChanged(auth, async (fbUser) => {
       if (fbUser) {
         state.user = {
           uid: fbUser.uid,
-          displayName: fbUser.displayName || fbUser.email.replace("@plateplan.user", ""),
-          email: fbUser.email,
-          isCloud: true
+          displayName: fbUser.displayName || (fbUser.email ? fbUser.email.replace("@plateplan.user", "") : "Chef"),
+          email: fbUser.email || "",
+          isCloud: true,
+          status: "approved"
         };
-        renderAuthUI();
         await loadUserPlanFromFirestore(fbUser.uid);
+        await checkAndLoadAdminStatus();
+        renderAll();
       } else {
         state.user = null;
-        renderAuthUI();
+        state.isAdmin = false;
+        renderAll();
       }
     });
   } catch (err) {
@@ -178,13 +206,45 @@ async function initFirebaseIfConfigured() {
   }
 }
 
+async function loadPublicCloudCatalog() {
+  if (!state.firebaseReady || !state.fbDb) return;
+  const { collection, getDocs } = state.fbModules;
+
+  try {
+    const globalSnap = await getDocs(collection(state.fbDb, "globalRecipes"));
+    state.globalRecipes = [];
+    globalSnap.forEach((d) => {
+      state.globalRecipes.push({ id: d.id, ...d.data(), isGlobal: true });
+    });
+  } catch (err) {
+    console.warn("Could not load globalRecipes:", err);
+  }
+
+  try {
+    const tplSnap = await getDocs(collection(state.fbDb, "officialPlans"));
+    state.officialTemplates = [];
+    tplSnap.forEach((d) => {
+      state.officialTemplates.push({ id: d.id, ...d.data() });
+    });
+  } catch (err) {
+    console.warn("Could not load officialPlans:", err);
+  }
+
+  renderOfficialTemplateDropdown();
+  renderRecipesGrid();
+  renderWeeklyGrid();
+}
+
 async function loadUserPlanFromFirestore(uid) {
   if (!state.firebaseReady || !state.fbDb) return;
   try {
-    const { doc, getDoc } = state.fbModules;
-    const snap = await getDoc(doc(state.fbDb, "users", uid));
+    const { doc, getDoc, setDoc } = state.fbModules;
+    const userRef = doc(state.fbDb, "users", uid);
+    const snap = await getDoc(userRef);
+
     if (snap.exists()) {
       const data = snap.data();
+      state.user.status = data.status || "approved";
       if (data.planTitle) state.planTitle = data.planTitle;
       if (data.calorieGoal) state.calorieGoal = Number(data.calorieGoal) || 2000;
       if (data.weeklyPlan) state.weeklyPlan = data.weeklyPlan;
@@ -195,14 +255,423 @@ async function loadUserPlanFromFirestore(uid) {
       document.getElementById("planTitleInput").value = state.planTitle;
       document.getElementById("calorieGoalInput").value = state.calorieGoal;
       saveToLocalStorage();
-      renderAll();
-      showToast("☁️ Synced your meal plan from Firebase!");
     } else {
-      // Save current plan to initialize their Firestore document
-      await persistState(false);
+      // Create initial user profile with status: 'approved' as required by Firestore Rules
+      await setDoc(userRef, {
+        displayName: state.user.displayName,
+        email: state.user.email,
+        status: "approved",
+        planTitle: state.planTitle,
+        calorieGoal: state.calorieGoal,
+        weeklyPlan: state.weeklyPlan,
+        customRecipes: state.customRecipes,
+        checkedGroceries: state.checkedGroceries,
+        extraGroceries: state.extraGroceries,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      });
+    }
+
+    const blockedBanner = document.getElementById("blockedAccountBanner");
+    if (state.user.status === "blocked") {
+      blockedBanner.classList.remove("hidden");
+    } else {
+      blockedBanner.classList.add("hidden");
     }
   } catch (err) {
-    console.warn("Could not read Firestore document:", err);
+    console.warn("Could not read Firestore user document:", err);
+  }
+}
+
+// ============================================================================
+// ADMIN VERIFICATION & ADMIN DATA LOADER
+// ============================================================================
+
+async function checkAndLoadAdminStatus() {
+  const uidDisplay = document.getElementById("currentUserUidDisplay");
+  if (!state.user || !state.user.isCloud || !state.firebaseReady) {
+    state.isAdmin = false;
+    uidDisplay.textContent = "Not signed in — please Sign In first";
+    renderAdminSection();
+    return;
+  }
+
+  uidDisplay.textContent = state.user.uid;
+
+  try {
+    const { doc, getDoc } = state.fbModules;
+    const adminSnap = await getDoc(doc(state.fbDb, "admins", state.user.uid));
+    state.isAdmin = adminSnap.exists();
+  } catch (err) {
+    console.warn("Admin check error:", err);
+    state.isAdmin = false;
+  }
+
+  // Toggle admin direct-publish option in recipe creation modal
+  const optGlobal = document.getElementById("optGlobalAdminPublish");
+  if (state.isAdmin) {
+    optGlobal.classList.remove("hidden");
+    await loadAllAdminData();
+  } else {
+    optGlobal.classList.add("hidden");
+  }
+
+  renderAdminSection();
+}
+
+async function loadAllAdminData() {
+  if (!state.isAdmin || !state.firebaseReady || !state.fbDb) return;
+  const { collection, getDocs } = state.fbModules;
+
+  try {
+    await loadPublicCloudCatalog();
+
+    // 1. Load all admins
+    const adminsSnap = await getDocs(collection(state.fbDb, "admins"));
+    state.adminUids = new Set();
+    adminsSnap.forEach((d) => state.adminUids.add(d.id));
+
+    // 2. Load all registered users
+    const usersSnap = await getDocs(collection(state.fbDb, "users"));
+    state.registeredUsers = [];
+    usersSnap.forEach((d) => {
+      state.registeredUsers.push({ uid: d.id, ...d.data() });
+    });
+
+    // 3. Load pending recipe submissions
+    const subSnap = await getDocs(collection(state.fbDb, "recipeSubmissions"));
+    state.pendingSubmissions = [];
+    subSnap.forEach((d) => {
+      const data = d.data();
+      if (data.status === "pending") {
+        state.pendingSubmissions.push({ subId: d.id, ...data });
+      }
+    });
+  } catch (err) {
+    console.error("Failed to load admin collections:", err);
+  }
+
+  renderAdminSection();
+}
+
+function renderAdminSection() {
+  const lockedCard = document.getElementById("adminLockedCard");
+  const dashContent = document.getElementById("adminDashboardContent");
+  const pendingBadge = document.getElementById("adminPendingBadge");
+
+  if (!state.isAdmin) {
+    lockedCard.classList.remove("hidden");
+    dashContent.classList.add("hidden");
+    pendingBadge.classList.add("hidden");
+    return;
+  }
+
+  lockedCard.classList.add("hidden");
+  dashContent.classList.remove("hidden");
+
+  // Pending badge in navbar
+  const pendingCount = state.pendingSubmissions.length;
+  document.getElementById("pendingSubmissionsCount").textContent = pendingCount;
+  if (pendingCount > 0) {
+    pendingBadge.textContent = pendingCount;
+    pendingBadge.classList.remove("hidden");
+  } else {
+    pendingBadge.classList.add("hidden");
+  }
+
+  // 1. Render Pending Submissions
+  const subList = document.getElementById("adminSubmissionsList");
+  subList.innerHTML = "";
+  if (state.pendingSubmissions.length === 0) {
+    subList.innerHTML = `<p class="muted">No pending community recipe submissions right now.</p>`;
+  } else {
+    state.pendingSubmissions.forEach((sub) => {
+      const row = document.createElement("div");
+      row.className = "admin-item-row";
+      row.innerHTML = `
+        <div>
+          <strong>${sub.emoji || "🍲"} ${escapeHtml(sub.title)}</strong>
+          <span class="category-badge" style="margin-left:6px;">${escapeHtml(sub.category)}</span>
+          <div class="muted" style="font-size:0.8rem;">
+            By ${escapeHtml(sub.authorName || "User")} • ${sub.calories} kcal (P:${sub.protein}g C:${sub.carbs}g F:${sub.fat}g)
+          </div>
+        </div>
+        <div style="display:flex; gap:6px;">
+          <button class="btn btn-primary btn-sm" data-approve-sub="${sub.subId}">✅ Approve</button>
+          <button class="btn btn-danger-ghost btn-sm" data-reject-sub="${sub.subId}">❌ Reject</button>
+        </div>
+      `;
+
+      row.querySelector(`[data-approve-sub="${sub.subId}"]`).addEventListener("click", () => {
+        approveRecipeSubmission(sub);
+      });
+      row.querySelector(`[data-reject-sub="${sub.subId}"]`).addEventListener("click", () => {
+        rejectRecipeSubmission(sub.subId);
+      });
+      subList.appendChild(row);
+    });
+  }
+
+  // 2. Render Official Templates List
+  document.getElementById("officialTemplatesCount").textContent = state.officialTemplates.length;
+  const tplList = document.getElementById("adminTemplatesList");
+  tplList.innerHTML = "";
+  if (state.officialTemplates.length === 0) {
+    tplList.innerHTML = `<p class="muted">No official templates published yet. Click "Publish Current Plan as Official Template" above!</p>`;
+  } else {
+    state.officialTemplates.forEach((tpl) => {
+      const row = document.createElement("div");
+      row.className = "admin-item-row";
+      row.innerHTML = `
+        <div>
+          <strong>📋 ${escapeHtml(tpl.planTitle)}</strong>
+          <div class="muted" style="font-size:0.8rem;">Target: ${tpl.calorieGoal || 2000} kcal/day</div>
+        </div>
+        <button class="btn btn-danger-ghost btn-sm" data-del-tpl="${tpl.id}">🗑️ Delete</button>
+      `;
+      row.querySelector(`[data-del-tpl="${tpl.id}"]`).addEventListener("click", () => {
+        deleteOfficialTemplate(tpl.id);
+      });
+      tplList.appendChild(row);
+    });
+  }
+
+  // 3. Render Registered Users Table
+  document.getElementById("registeredUsersCount").textContent = state.registeredUsers.length;
+  const tbody = document.getElementById("adminUsersTableBody");
+  tbody.innerHTML = "";
+  state.registeredUsers.forEach((u) => {
+    const isUserAdmin = state.adminUids.has(u.uid);
+    const status = u.status || "approved";
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td>
+        <strong>${escapeHtml(u.displayName || "User")}</strong>
+        <div class="muted" style="font-size:0.76rem;">${escapeHtml(u.email || "")}</div>
+      </td>
+      <td><code style="font-size:0.75rem;">${escapeHtml(u.uid)}</code></td>
+      <td>${escapeHtml(u.planTitle || "Default Plan")}</td>
+      <td>
+        <span class="status-pill ${status === "blocked" ? "blocked" : "approved"}">
+          ${status.toUpperCase()}
+        </span>
+      </td>
+      <td>
+        ${
+          isUserAdmin
+            ? `<span class="status-pill admin-role">🛡️ ADMIN</span>`
+            : `<span class="muted">Member</span>`
+        }
+      </td>
+      <td>
+        <div style="display:flex; gap:6px; flex-wrap:wrap;">
+          <button class="btn btn-outline btn-sm" data-push-plan="${u.uid}" title="Overwrite this user's weekly plan with your currently active plan">
+            📤 Push Plan
+          </button>
+          <button class="btn btn-ghost btn-sm" data-toggle-status="${u.uid}">
+            ${status === "blocked" ? "✅ Unblock" : "🚫 Block"}
+          </button>
+          <button class="btn btn-ghost btn-sm" data-toggle-admin="${u.uid}">
+            ${isUserAdmin ? "Demote Admin" : "🛡️ Make Admin"}
+          </button>
+        </div>
+      </td>
+    `;
+
+    tr.querySelector(`[data-push-plan="${u.uid}"]`).addEventListener("click", () => {
+      pushCurrentPlanToUser(u);
+    });
+    tr.querySelector(`[data-toggle-status="${u.uid}"]`).addEventListener("click", () => {
+      toggleUserBlockStatus(u);
+    });
+    tr.querySelector(`[data-toggle-admin="${u.uid}"]`).addEventListener("click", () => {
+      toggleUserAdminRole(u.uid, isUserAdmin);
+    });
+
+    tbody.appendChild(tr);
+  });
+
+  // 4. Render Global Recipes List
+  const globalList = document.getElementById("adminGlobalRecipesList");
+  globalList.innerHTML = "";
+  if (state.globalRecipes.length === 0) {
+    globalList.innerHTML = `<p class="muted">No custom global recipes in Firestore yet (starter recipes are built-in).</p>`;
+  } else {
+    state.globalRecipes.forEach((rec) => {
+      const row = document.createElement("div");
+      row.className = "admin-item-row";
+      row.innerHTML = `
+        <div>
+          <strong>${rec.emoji || "🍲"} ${escapeHtml(rec.title)}</strong>
+          <span class="category-badge" style="margin-left:6px;">${escapeHtml(rec.category)}</span>
+          <span class="muted" style="margin-left:8px; font-size:0.8rem;">${rec.calories} kcal</span>
+        </div>
+        <button class="btn btn-danger-ghost btn-sm" data-del-global="${rec.id}">🗑️ Remove from Global</button>
+      `;
+      row.querySelector(`[data-del-global="${rec.id}"]`).addEventListener("click", () => {
+        deleteGlobalRecipe(rec.id);
+      });
+      globalList.appendChild(row);
+    });
+  }
+}
+
+// Admin Operations
+async function approveRecipeSubmission(sub) {
+  if (!state.isAdmin || !state.fbDb) return;
+  try {
+    const { doc, setDoc, updateDoc } = state.fbModules;
+    const globalId = "global-" + sub.subId;
+    const recipeData = {
+      id: globalId,
+      title: sub.title,
+      category: sub.category,
+      description: sub.description || "",
+      prepTime: sub.prepTime || 10,
+      cookTime: sub.cookTime || 15,
+      servings: sub.servings || 2,
+      emoji: sub.emoji || "🍲",
+      calories: sub.calories || 400,
+      protein: sub.protein || 25,
+      carbs: sub.carbs || 35,
+      fat: sub.fat || 15,
+      tags: ["Community Approved"],
+      ingredients: sub.ingredients || [],
+      instructions: sub.instructions || [],
+      approvedBy: state.user.uid,
+      approvedAt: new Date().toISOString()
+    };
+
+    await setDoc(doc(state.fbDb, "globalRecipes", globalId), recipeData);
+    await updateDoc(doc(state.fbDb, "recipeSubmissions", sub.subId), {
+      status: "approved",
+      approvedAt: new Date().toISOString()
+    });
+
+    showToast(`✅ Approved "${sub.title}" & published to Global Library!`);
+    await loadAllAdminData();
+    renderAll();
+  } catch (err) {
+    showToast("⚠️ Error approving submission: " + err.message);
+  }
+}
+
+async function rejectRecipeSubmission(subId) {
+  if (!state.isAdmin || !state.fbDb) return;
+  try {
+    const { doc, deleteDoc } = state.fbModules;
+    await deleteDoc(doc(state.fbDb, "recipeSubmissions", subId));
+    showToast("🗑️ Submission rejected & removed.");
+    await loadAllAdminData();
+  } catch (err) {
+    showToast("⚠️ Error rejecting submission: " + err.message);
+  }
+}
+
+async function publishCurrentPlanAsTemplate() {
+  if (!state.isAdmin || !state.fbDb) return;
+  try {
+    const { doc, setDoc } = state.fbModules;
+    const tplId = "tpl-" + Date.now();
+    await setDoc(doc(state.fbDb, "officialPlans", tplId), {
+      planTitle: state.planTitle,
+      calorieGoal: state.calorieGoal,
+      weeklyPlan: state.weeklyPlan,
+      publishedBy: state.user.displayName,
+      publishedAt: new Date().toISOString()
+    });
+    showToast(`📢 Published "${state.planTitle}" to Official Templates!`);
+    await loadAllAdminData();
+  } catch (err) {
+    showToast("⚠️ Failed to publish template: " + err.message);
+  }
+}
+
+async function deleteOfficialTemplate(tplId) {
+  if (!state.isAdmin || !state.fbDb) return;
+  try {
+    const { doc, deleteDoc } = state.fbModules;
+    await deleteDoc(doc(state.fbDb, "officialPlans", tplId));
+    showToast("🗑️ Deleted official template.");
+    await loadAllAdminData();
+  } catch (err) {
+    showToast("⚠️ Error deleting template: " + err.message);
+  }
+}
+
+async function pushCurrentPlanToUser(targetUser) {
+  if (!state.isAdmin || !state.fbDb) return;
+  try {
+    const { doc, setDoc } = state.fbModules;
+    await setDoc(
+      doc(state.fbDb, "users", targetUser.uid),
+      {
+        planTitle: `${state.planTitle} (Assigned by Admin)`,
+        calorieGoal: state.calorieGoal,
+        weeklyPlan: state.weeklyPlan,
+        updatedAt: new Date().toISOString()
+      },
+      { merge: true }
+    );
+    showToast(`📤 Pushed "${state.planTitle}" to ${targetUser.displayName || targetUser.uid}!`);
+    await loadAllAdminData();
+  } catch (err) {
+    showToast("⚠️ Failed to push plan: " + err.message);
+  }
+}
+
+async function toggleUserBlockStatus(targetUser) {
+  if (!state.isAdmin || !state.fbDb) return;
+  const newStatus = targetUser.status === "blocked" ? "approved" : "blocked";
+  try {
+    const { doc, setDoc } = state.fbModules;
+    await setDoc(
+      doc(state.fbDb, "users", targetUser.uid),
+      { status: newStatus, updatedAt: new Date().toISOString() },
+      { merge: true }
+    );
+    showToast(`Updated ${targetUser.displayName || targetUser.uid} status to ${newStatus.toUpperCase()}.`);
+    await loadAllAdminData();
+  } catch (err) {
+    showToast("⚠️ Failed to update user status: " + err.message);
+  }
+}
+
+async function toggleUserAdminRole(targetUid, currentlyAdmin) {
+  if (!state.isAdmin || !state.fbDb) return;
+  if (targetUid === state.user.uid && currentlyAdmin) {
+    showToast("⚠️ You cannot demote your own active Admin session.");
+    return;
+  }
+  try {
+    const { doc, setDoc, deleteDoc } = state.fbModules;
+    if (currentlyAdmin) {
+      await deleteDoc(doc(state.fbDb, "admins", targetUid));
+      showToast("Revoked Admin privileges.");
+    } else {
+      await setDoc(doc(state.fbDb, "admins", targetUid), {
+        role: "admin",
+        grantedBy: state.user.uid,
+        grantedAt: new Date().toISOString()
+      });
+      showToast("🛡️ Granted Admin privileges!");
+    }
+    await loadAllAdminData();
+  } catch (err) {
+    showToast("⚠️ Failed to change Admin role: " + err.message);
+  }
+}
+
+async function deleteGlobalRecipe(recId) {
+  if (!state.isAdmin || !state.fbDb) return;
+  try {
+    const { doc, deleteDoc } = state.fbModules;
+    await deleteDoc(doc(state.fbDb, "globalRecipes", recId));
+    showToast("🗑️ Removed global recipe.");
+    await loadAllAdminData();
+    renderAll();
+  } catch (err) {
+    showToast("⚠️ Failed to delete global recipe: " + err.message);
   }
 }
 
@@ -224,10 +693,24 @@ function updateCloudBadge(isOnline) {
 
 function renderAll() {
   renderSummaryBanner();
+  renderOfficialTemplateDropdown();
   renderWeeklyGrid();
   renderRecipesGrid();
   renderGroceryList();
   renderAuthUI();
+  renderAdminSection();
+}
+
+function renderOfficialTemplateDropdown() {
+  const sel = document.getElementById("officialTemplateSelect");
+  if (!sel) return;
+  sel.innerHTML = `<option value="">📋 Load Official Template Plan...</option>`;
+  state.officialTemplates.forEach((tpl) => {
+    const opt = document.createElement("option");
+    opt.value = tpl.id;
+    opt.textContent = `⭐ ${tpl.planTitle} (${tpl.calorieGoal || 2000} kcal)`;
+    sel.appendChild(opt);
+  });
 }
 
 function renderSummaryBanner() {
@@ -248,15 +731,10 @@ function renderSummaryBanner() {
     });
   });
 
-  const avgCal = Math.round(totalCal / 7);
-  const avgProtein = Math.round(totalProtein / 7);
-  const avgCarbs = Math.round(totalCarbs / 7);
-  const avgFat = Math.round(totalFat / 7);
-
-  document.getElementById("avgCaloriesStat").textContent = `${avgCal} kcal`;
-  document.getElementById("avgProteinStat").textContent = `${avgProtein}g`;
-  document.getElementById("avgCarbsStat").textContent = `${avgCarbs}g`;
-  document.getElementById("avgFatStat").textContent = `${avgFat}g`;
+  document.getElementById("avgCaloriesStat").textContent = `${Math.round(totalCal / 7)} kcal`;
+  document.getElementById("avgProteinStat").textContent = `${Math.round(totalProtein / 7)}g`;
+  document.getElementById("avgCarbsStat").textContent = `${Math.round(totalCarbs / 7)}g`;
+  document.getElementById("avgFatStat").textContent = `${Math.round(totalFat / 7)}g`;
 }
 
 function renderWeeklyGrid() {
@@ -400,6 +878,7 @@ function renderRecipesGrid() {
         <div class="recipe-card-top">
           <div>
             <span class="category-badge">${escapeHtml(rec.category)}</span>
+            ${rec.isGlobal ? `<span class="category-badge" style="background:#dbeafe; color:#1e40af; margin-left:4px;">Global</span>` : ""}
             <h3>${escapeHtml(rec.title)}</h3>
           </div>
           <div class="recipe-emoji-badge">${rec.emoji || "🍲"}</div>
@@ -593,7 +1072,6 @@ function openRecipeDetailModal(recipeId) {
     stepList.appendChild(li);
   });
 
-  // Pre-select matching slot category if applicable
   if (MEAL_SLOTS.includes(rec.category)) {
     document.getElementById("assignSlotSelect").value = rec.category;
   }
@@ -616,7 +1094,6 @@ function renderSlotPickerItems(filterText) {
   list.innerHTML = "";
   const q = filterText.trim().toLowerCase();
 
-  // Sort recipes so matching slot category appears first
   const targetSlot = state.activeSlotContext?.slot;
   const sorted = [...getAllRecipes()].sort((a, b) => {
     if (a.category === targetSlot && b.category !== targetSlot) return -1;
@@ -662,7 +1139,7 @@ function renderAuthUI() {
   if (state.user) {
     authArea.innerHTML = `
       <div class="user-chip">
-        <span>👤 ${escapeHtml(state.user.displayName)}</span>
+        <span>${state.isAdmin ? "🛡️" : "👤"} ${escapeHtml(state.user.displayName)}</span>
         <button id="btnSignOut" class="btn btn-ghost btn-sm" style="padding:3px 8px;">Sign Out</button>
       </div>
     `;
@@ -699,7 +1176,6 @@ async function handleGoogleSignIn() {
       errEl.classList.remove("hidden");
     }
   } else {
-    // Local Demo Google login when Firebase is not yet configured
     state.user = {
       uid: "local-google-user",
       displayName: "Google Chef (Local Mode)",
@@ -709,7 +1185,7 @@ async function handleGoogleSignIn() {
     localStorage.setItem("plateplan_local_user", JSON.stringify(state.user));
     document.getElementById("authModal").classList.add("hidden");
     renderAuthUI();
-    showToast("👋 Signed in (Local Mode). Configure Firebase for cloud sync!");
+    showToast("👋 Signed in (Local Mode).");
   }
 }
 
@@ -745,7 +1221,6 @@ async function handleCredentialsSubmit(e) {
       errEl.classList.remove("hidden");
     }
   } else {
-    // Local credential login fallback
     state.user = {
       uid: `local-${displayUsername}`,
       displayName: displayUsername,
@@ -766,7 +1241,8 @@ async function handleSignOut() {
   }
   localStorage.removeItem("plateplan_local_user");
   state.user = null;
-  renderAuthUI();
+  state.isAdmin = false;
+  renderAll();
   showToast("Signed out.");
 }
 
@@ -782,7 +1258,6 @@ function buildPrintableSheetHTML() {
     byAisle[g.aisle].push(g);
   });
 
-  // Collect unique recipes used in the weekly plan
   const usedRecipeIds = new Set();
   DAYS_OF_WEEK.forEach((day) => {
     MEAL_SLOTS.forEach((slot) => {
@@ -931,6 +1406,24 @@ function bindUIEvents() {
     renderWeeklyGrid();
   });
 
+  // Load Official Template Plan Dropdown
+  document.getElementById("officialTemplateSelect").addEventListener("change", (e) => {
+    const tplId = e.target.value;
+    if (!tplId) return;
+    const tpl = state.officialTemplates.find((t) => t.id === tplId);
+    if (tpl && tpl.weeklyPlan) {
+      state.planTitle = tpl.planTitle;
+      state.calorieGoal = Number(tpl.calorieGoal) || 2000;
+      state.weeklyPlan = structuredClone(tpl.weeklyPlan);
+      document.getElementById("planTitleInput").value = state.planTitle;
+      document.getElementById("calorieGoalInput").value = state.calorieGoal;
+      persistState();
+      renderAll();
+      showToast(`📋 Loaded official template "${tpl.planTitle}"!`);
+    }
+    e.target.value = "";
+  });
+
   // Auto-Generate Balanced Week
   document.getElementById("btnAutoGenerate").addEventListener("click", () => {
     const all = getAllRecipes();
@@ -1010,10 +1503,16 @@ function bindUIEvents() {
 
   // Create Custom Recipe Modal
   document.getElementById("btnNewRecipe").addEventListener("click", () => {
+    document.getElementById("recPublishScope").value = "personal";
     document.getElementById("newRecipeModal").classList.remove("hidden");
   });
 
-  document.getElementById("newRecipeForm").addEventListener("submit", (e) => {
+  document.getElementById("btnAdminAddGlobalRecipe").addEventListener("click", () => {
+    document.getElementById("recPublishScope").value = "global_admin";
+    document.getElementById("newRecipeModal").classList.remove("hidden");
+  });
+
+  document.getElementById("newRecipeForm").addEventListener("submit", async (e) => {
     e.preventDefault();
     const ingredientsRaw = document
       .getElementById("recIngredientsText")
@@ -1040,6 +1539,8 @@ function bindUIEvents() {
       .map((l) => l.trim())
       .filter(Boolean);
 
+    const scope = document.getElementById("recPublishScope").value;
+
     const newRec = {
       id: "custom-" + Date.now(),
       title: document.getElementById("recTitle").value.trim(),
@@ -1058,13 +1559,78 @@ function bindUIEvents() {
       instructions
     };
 
+    // Always add to personal recipes
     state.customRecipes.unshift(newRec);
-    persistState();
+    await persistState();
+
+    // If user chose to submit for Admin community approval
+    if (scope === "submit_community" && state.firebaseReady && state.user?.isCloud) {
+      try {
+        const { doc, setDoc } = state.fbModules;
+        const subId = `${state.user.uid}_${Date.now()}`;
+        await setDoc(doc(state.fbDb, "recipeSubmissions", subId), {
+          ...newRec,
+          authorId: state.user.uid,
+          authorName: state.user.displayName,
+          status: "pending",
+          submittedAt: new Date().toISOString()
+        });
+        showToast("📤 Recipe saved & submitted to Admins for global review!");
+      } catch (err) {
+        showToast("⚠️ Saved locally, but community submission failed: " + err.message);
+      }
+    } else if (scope === "global_admin" && state.isAdmin && state.firebaseReady) {
+      try {
+        const { doc, setDoc } = state.fbModules;
+        const globalId = "global-" + Date.now();
+        await setDoc(doc(state.fbDb, "globalRecipes", globalId), {
+          ...newRec,
+          id: globalId,
+          approvedBy: state.user.uid,
+          approvedAt: new Date().toISOString()
+        });
+        await loadAllAdminData();
+        showToast("🌍 Published directly to Global Recipe Library!");
+      } catch (err) {
+        showToast("⚠️ Failed to publish global recipe: " + err.message);
+      }
+    } else {
+      showToast(`👩‍🍳 Created recipe "${newRec.title}"!`);
+    }
+
     renderAll();
     e.target.reset();
     document.getElementById("newRecipeModal").classList.add("hidden");
-    showToast(`👩‍🍳 Created recipe "${newRec.title}"!`);
   });
+
+  // Admin Panel Buttons
+  document.getElementById("btnCopyUid").addEventListener("click", () => {
+    if (!state.user?.uid) {
+      showToast("Please Sign In first to get your UID!");
+      return;
+    }
+    navigator.clipboard.writeText(state.user.uid);
+    showToast("📋 Copied your UID to clipboard!");
+  });
+
+  document.getElementById("btnRefreshAdminStatus").addEventListener("click", async () => {
+    showToast("🔄 Checking /admins collection in Firestore...");
+    await checkAndLoadAdminStatus();
+    if (state.isAdmin) {
+      showToast("🛡️ Admin access verified! Welcome to the Control Center.");
+    } else {
+      showToast("Still not found in /admins/{uid}. Make sure you saved the document in Firestore.");
+    }
+  });
+
+  document.getElementById("btnAdminRefreshAll").addEventListener("click", async () => {
+    await loadAllAdminData();
+    showToast("🔄 Refreshed all Admin data from Firestore.");
+  });
+
+  document
+    .getElementById("btnPublishCurrentPlanTemplate")
+    .addEventListener("click", publishCurrentPlanAsTemplate);
 
   // Grocery Form & Actions
   document.getElementById("customGroceryForm").addEventListener("submit", (e) => {
@@ -1130,16 +1696,14 @@ function bindUIEvents() {
     };
     localStorage.setItem("plateplan_firebase_config", JSON.stringify(newConfig));
     document.getElementById("firebaseSetupModal").classList.add("hidden");
-    showToast("🔥 Firebase configuration saved! Connecting...");
+    showToast("🔥 Firebase configuration saved! Reconnecting...");
     await initFirebaseIfConfigured();
   });
 
   document.getElementById("btnResetFirebaseConfig").addEventListener("click", () => {
     localStorage.removeItem("plateplan_firebase_config");
-    state.firebaseReady = false;
-    updateCloudBadge(false);
     document.getElementById("firebaseSetupModal").classList.add("hidden");
-    showToast("Switched to Local Demo Mode.");
+    showToast("Reset to default Firebase configuration.");
   });
 
   // Close Modals

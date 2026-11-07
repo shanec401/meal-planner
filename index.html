@@ -35,6 +35,10 @@
           <span class="tab-icon">🛒</span> Grocery List
           <span id="groceryCountBadge" class="badge-pill">0</span>
         </button>
+        <button class="nav-tab" data-tab="admin" id="adminNavTab">
+          <span class="tab-icon">🛡️</span> Admin
+          <span id="adminPendingBadge" class="badge-pill badge-warn hidden">0</span>
+        </button>
       </nav>
 
       <div class="topbar-actions">
@@ -58,7 +62,12 @@
 
   <!-- Main Content Container -->
   <main class="container main-content no-print">
-    <!--Macro & Plan Summary Banner-->
+    <!-- Blocked User Banner (shown only if an Admin blocks the signed-in account) -->
+    <div id="blockedAccountBanner" class="alert-banner danger hidden">
+      🚫 <strong>Account Restricted:</strong> Your account has been restricted by an Administrator. You cannot save changes or submit recipes.
+    </div>
+
+    <!-- Macro & Plan Summary Banner -->
     <section class="summary-banner">
       <div class="summary-left">
         <div>
@@ -114,6 +123,12 @@
           <label for="calorieGoalInput">Daily Calorie Target:</label>
           <input id="calorieGoalInput" type="number" min="1000" max="5000" step="50" value="2000" />
           <span>kcal/day</span>
+
+          <div class="template-loader-wrap">
+            <select id="officialTemplateSelect" aria-label="Load Official Template Plan">
+              <option value="">📋 Load Official Template Plan...</option>
+            </select>
+          </div>
         </div>
         <div class="planner-toolbar-right">
           <button id="btnPrintView" class="btn btn-ghost btn-sm">🖨️ Print View</button>
@@ -196,6 +211,124 @@
 
       <div id="groceryAislesContainer" class="grocery-aisles-grid">
         <!-- Populated dynamically by app.js -->
+      </div>
+    </section>
+
+    <!-- ================================================================== -->
+    <!-- TAB 4: ADMIN DASHBOARD & DB SAFEGUARDS                             -->
+    <!-- ================================================================== -->
+    <section id="tab-admin" class="tab-panel">
+      <!-- Shown when user is NOT yet an Admin -->
+      <div id="adminLockedCard" class="admin-locked-card">
+        <div class="admin-locked-header">
+          <span class="admin-shield-icon">🛡️</span>
+          <div>
+            <h2>Admin Access Required</h2>
+            <p class="muted">
+              This section is protected by Firestore Database Rules (<code>exists(/databases/$(database)/documents/admins/$(request.auth.uid))</code>).
+            </p>
+          </div>
+        </div>
+
+        <div class="admin-bootstrap-box">
+          <h3>🔑 How to Make Yourself the First Admin in Firebase</h3>
+          <p class="muted">
+            Because the <code>/admins</code> collection can only be modified by existing Admins or via the Firebase Console, follow these 3 steps to grant your account Admin rights:
+          </p>
+          <ol class="admin-steps-list">
+            <li>Make sure you are signed in to PlatePlan. Your Firebase User UID is shown below:</li>
+          </ol>
+          <div class="uid-copy-row">
+            <code id="currentUserUidDisplay">Not signed in — please Sign In first</code>
+            <button id="btnCopyUid" type="button" class="btn btn-outline btn-sm">📋 Copy UID</button>
+          </div>
+          <ol class="admin-steps-list" start="2">
+            <li>
+              Open your <a href="https://console.firebase.google.com/project/plateplan-meals/firestore" target="_blank" rel="noopener">Firebase Firestore Data tab</a> and click <strong>"+ Start collection"</strong> (or select the <code>admins</code> collection).
+            </li>
+            <li>
+              Set <strong>Collection ID</strong> to <code>admins</code>, paste your <strong>UID</strong> as the <strong>Document ID</strong>, add a field <code>role</code> = <code>"admin"</code>, and click <strong>Save</strong>. Then click <strong>Refresh Admin Status</strong> below!
+            </li>
+          </ol>
+          <div style="margin-top: 14px;">
+            <button id="btnRefreshAdminStatus" class="btn btn-primary">🔄 Refresh Admin Status</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Shown when user IS verified as an Admin in /admins/{uid} -->
+      <div id="adminDashboardContent" class="hidden">
+        <div class="admin-top-bar">
+          <div>
+            <span class="category-badge">Verified Administrator</span>
+            <h2>🛡️ PlatePlan Admin Control Center</h2>
+            <p class="muted">Manage users, approve community recipes, publish global recipes, and push official meal plans.</p>
+          </div>
+          <div class="admin-top-actions">
+            <button id="btnAdminRefreshAll" class="btn btn-outline btn-sm">🔄 Refresh Data</button>
+            <button id="btnPublishCurrentPlanTemplate" class="btn btn-primary btn-sm">
+              📢 Publish Current Plan as Official Template
+            </button>
+          </div>
+        </div>
+
+        <div class="admin-grid-layout">
+          <!-- Panel 1: Pending Community Recipe Submissions -->
+          <div class="admin-card">
+            <div class="admin-card-header">
+              <h3>📥 Pending Recipe Submissions</h3>
+              <span id="pendingSubmissionsCount" class="badge-pill">0</span>
+            </div>
+            <p class="muted">Recipes submitted by users waiting for Admin approval to become public.</p>
+            <div id="adminSubmissionsList" class="admin-list-container"></div>
+          </div>
+
+          <!-- Panel 2: Official Template Meal Plans -->
+          <div class="admin-card">
+            <div class="admin-card-header">
+              <h3>📋 Official Template Meal Plans</h3>
+              <span id="officialTemplatesCount" class="badge-pill">0</span>
+            </div>
+            <p class="muted">Template plans available in the planner dropdown for all users.</p>
+            <div id="adminTemplatesList" class="admin-list-container"></div>
+          </div>
+
+          <!-- Panel 3: Registered Users & Role / Plan Management -->
+          <div class="admin-card full-span">
+            <div class="admin-card-header">
+              <h3>👥 Registered Users &amp; Access Control</h3>
+              <span id="registeredUsersCount" class="badge-pill">0</span>
+            </div>
+            <p class="muted">
+              Approve or block users, promote users to Admin (<code>/admins/{uid}</code>), or push your currently active 7-day meal plan directly to a user's account.
+            </p>
+            <div class="admin-table-wrap">
+              <table class="admin-table">
+                <thead>
+                  <tr>
+                    <th>User</th>
+                    <th>UID</th>
+                    <th>Current Plan</th>
+                    <th>Status</th>
+                    <th>Role</th>
+                    <th>Admin Actions</th>
+                  </tr>
+                </thead>
+                <tbody id="adminUsersTableBody"></tbody>
+              </table>
+            </div>
+          </div>
+
+          <!-- Panel 4: Global Recipes Catalog Manager -->
+          <div class="admin-card full-span">
+            <div class="admin-card-header">
+              <h3>🌍 Published Global Recipes (Firestore)</h3>
+              <button id="btnAdminAddGlobalRecipe" class="btn btn-primary btn-sm">➕ New Global Recipe</button>
+            </div>
+            <p class="muted">Global recipes stored in <code>/globalRecipes</code> that appear for every visitor alongside starter recipes.</p>
+            <div id="adminGlobalRecipesList" class="admin-list-container"></div>
+          </div>
+        </div>
       </div>
     </section>
   </main>
@@ -291,12 +424,12 @@
   </div>
 
   <!-- ==================================================================== -->
-  <!-- MODAL 3: CREATE CUSTOM RECIPE                                        -->
+  <!-- MODAL 3: CREATE CUSTOM / COMMUNITY / GLOBAL RECIPE                   -->
   <!-- ==================================================================== -->
   <div id="newRecipeModal" class="modal-backdrop hidden no-print" role="dialog" aria-modal="true">
     <div class="modal-card modal-lg">
       <div class="modal-header">
-        <h2>➕ Create Custom Recipe</h2>
+        <h2 id="newRecipeModalTitle">➕ Create Custom Recipe</h2>
         <button class="modal-close" data-close-modal="newRecipeModal" aria-label="Close">&times;</button>
       </div>
       <form id="newRecipeForm" class="modal-body">
@@ -361,12 +494,21 @@
 
         <div class="form-group">
           <label>Ingredients (One per line: <code>Amount | Unit | Ingredient Name | Aisle</code>)</label>
-          <textarea id="recIngredientsText" rows="5" required placeholder="300 | g | Wild shrimp, peeled | Meat & Seafood&#10;4 | whole | Corn tortillas | Bakery&#10;1 | cup | Shredded purple cabbage | Produce&#10;1 | tbsp | Lime juice | Produce"></textarea>
+          <textarea id="recIngredientsText" rows="4" required placeholder="300 | g | Wild shrimp, peeled | Meat & Seafood&#10;4 | whole | Corn tortillas | Bakery&#10;1 | cup | Shredded purple cabbage | Produce&#10;1 | tbsp | Lime juice | Produce"></textarea>
         </div>
 
         <div class="form-group">
           <label>Cooking Instructions (One step per line)</label>
-          <textarea id="recInstructionsText" rows="5" required placeholder="Pat shrimp dry and season with garlic powder, cumin, paprika, and salt.&#10;Sear shrimp in a hot skillet with olive oil for 2 minutes per side.&#10;Warm the corn tortillas and assemble with cabbage slaw and shrimp."></textarea>
+          <textarea id="recInstructionsText" rows="4" required placeholder="Pat shrimp dry and season with garlic powder, cumin, paprika, and salt.&#10;Sear shrimp in a hot skillet with olive oil for 2 minutes per side.&#10;Warm the corn tortillas and assemble with cabbage slaw and shrimp."></textarea>
+        </div>
+
+        <div class="form-group publish-scope-box">
+          <label for="recPublishScope">Recipe Visibility &amp; Community Sharing</label>
+          <select id="recPublishScope">
+            <option value="personal">🔒 Save to My Personal Recipes only</option>
+            <option value="submit_community">📤 Submit to Admins for Public Community Library (Pending Approval)</option>
+            <option value="global_admin" id="optGlobalAdminPublish" class="hidden">🌍 [Admin] Publish Directly to Global Public Library</option>
+          </select>
         </div>
 
         <div class="modal-footer">
@@ -447,17 +589,8 @@
       </div>
       <div class="modal-body">
         <p class="muted">
-          To enable real cloud login (Google &amp; Username/Password) and cross-device Firestore database saving on GitHub Pages, paste your Firebase Web App configuration below or edit <code>firebase-config.js</code>.
+          Connected to Firebase project <code>plateplan-meals</code>. You can customize or reset your connection below.
         </p>
-
-        <div class="setup-steps">
-          <ol>
-            <li>Go to <a href="https://console.firebase.google.com/" target="_blank" rel="noopener">Firebase Console</a> &rarr; Create a project &rarr; Add a Web App (<code>&lt;/&gt;</code>).</li>
-            <li>In <strong>Authentication &rarr; Sign-in method</strong>, enable <strong>Email/Password</strong> and <strong>Google</strong>.</li>
-            <li>In <strong>Authentication &rarr; Settings &rarr; Authorized domains</strong>, add your GitHub Pages domain (<code>yourusername.github.io</code>).</li>
-            <li>In <strong>Firestore Database</strong>, create a database so users' meal plans and custom recipes are stored under <code>users/{uid}</code>.</li>
-          </ol>
-        </div>
 
         <form id="firebaseConfigForm">
           <div class="form-grid-2">
@@ -480,7 +613,7 @@
           </div>
 
           <div class="modal-footer">
-            <button type="button" id="btnResetFirebaseConfig" class="btn btn-danger-ghost">Use Local Demo Mode</button>
+            <button type="button" id="btnResetFirebaseConfig" class="btn btn-danger-ghost">Reset to Default Config</button>
             <button type="submit" class="btn btn-primary">Save &amp; Connect Firebase</button>
           </div>
         </form>
